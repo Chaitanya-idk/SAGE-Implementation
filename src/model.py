@@ -22,6 +22,19 @@ from peft import (
 
 from src.utils import get_device_info, resolve_dtype
 
+# Compatibility patch for pre-installed older torchao in Kaggle/cloud environments
+try:
+    import peft.import_utils
+    peft.import_utils.is_torchao_available = lambda: False
+except Exception:
+    pass
+
+try:
+    import peft.tuners.lora.torchao as _peft_torchao
+    _peft_torchao.is_torchao_available = lambda: False
+except Exception:
+    pass
+
 logger = logging.getLogger("SAGE.model")
 
 
