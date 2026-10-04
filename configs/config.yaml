@@ -1,0 +1,70 @@
+# ==============================================================================
+# SAGE Qwen2.5-VL-3B LoRA Training Configuration
+# Capstone Project: Scalable Agentic Grounded Evaluation for Crop Disease Diagnosis
+# ==============================================================================
+
+seed: 42
+
+model:
+  name: "Qwen/Qwen2.5-VL-3B-Instruct"
+  path: "" # Optional local path (e.g. /kaggle/input/qwen2-5-vl-3b-instruct)
+  dtype: "auto" # "auto" (detects bf16 support, else fp16), "bfloat16", "float16", "float32"
+  quantization: "none" # "none", "4bit" (NF4 double quant), "8bit"
+  trust_remote_code: true
+  min_pixels: 3136      # 56 * 56
+  max_pixels: 1003520   # ~1000 * 1000 (fits Kaggle GPU memory with rich visual feature extraction)
+
+lora:
+  r: 32
+  alpha: 64
+  dropout: 0.05
+  bias: "none"
+  target_modules:
+    - "q_proj"
+    - "k_proj"
+    - "v_proj"
+    - "o_proj"
+  task_type: "CAUSAL_LM"
+
+data:
+  dataset_name: "tirtho149/SAGE"
+  data_dir: "" # Optional local directory containing downloaded Parquet shards
+  manifest_dir: "artifacts/data"
+  max_train_samples: 200000 # Target 180,000 - 220,000 balanced samples
+  min_class_samples: 20     # Retain all examples if class count <= min_threshold
+  max_class_samples: 400    # Cap dominant classes at a reasonable maximum
+  validation_fraction: 0.05 # 5% validation
+  test_fraction: 0.05       # 5% test
+  target_column: "canonical_disease"
+  image_column: "image"
+  num_workers: 4
+  prefetch_factor: 2
+  pin_memory: true
+
+training:
+  epochs: 2
+  batch_size: 8
+  eval_batch_size: 8
+  gradient_accumulation_steps: 2
+  learning_rate: 0.0002
+  weight_decay: 0.01
+  warmup_ratio: 0.03
+  scheduler: "cosine"
+  max_grad_norm: 1.0
+  gradient_checkpointing: true
+  max_training_hours: 9.0   # Hard budget limit reserving ~1h for eval/checkpoints
+  eval_steps: 3000          # Step-wise validation interval
+  save_steps: 3000          # Checkpoint interval
+  logging_steps: 10
+  early_stopping_patience: 3
+
+evaluation:
+  primary_metric: "macro_f1" # "macro_f1", "accuracy", "normalized_accuracy"
+  eval_subset_size: 1000     # Fixed validation subset for periodic evaluation during training
+  full_eval_at_epoch_end: true
+  generation_max_new_tokens: 128
+  temperature: 0.0
+
+paths:
+  artifacts_dir: "artifacts"
+  checkpoints_dir: "checkpoints"

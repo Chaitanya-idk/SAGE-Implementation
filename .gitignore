@@ -1,0 +1,79 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Environments & virtualenvs
+.venv/
+env/
+venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints
+*/.ipynb_checkpoints/*
+
+# Model weights & Checkpoints
+checkpoints/*
+!checkpoints/.gitkeep
+*.pt
+*.bin
+*.safetensors
+*.pth
+*.onnx
+
+# Data & Parquets (Do not commit raw 20GB dataset or big data files)
+*.parquet
+*.arrow
+data/
+cache/
+.cache/
+hf_cache/
+downloads/
+
+# Large artifacts & run outputs
+artifacts/*
+!artifacts/.gitkeep
+!artifacts/data/
+!artifacts/metrics/
+!artifacts/predictions/
+!artifacts/failures/
+artifacts/data/*
+!artifacts/data/.gitkeep
+artifacts/metrics/*
+!artifacts/metrics/.gitkeep
+artifacts/predictions/*
+!artifacts/predictions/.gitkeep
+artifacts/failures/*
+!artifacts/failures/.gitkeep
+
+# Logs, monitoring, Kaggle & wandb
+*.log
+wandb/
+.wandb/
+tensorboard/
+runs/
+.kaggle/
+kaggle.json
+*.token
+
+# OS generated files
+.DS_Store
+Thumbs.db
+desktop.ini
