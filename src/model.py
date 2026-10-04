@@ -73,6 +73,8 @@ def load_processor(
         max_pixels=max_pixels,
         trust_remote_code=trust_remote_code,
     )
+    if hasattr(processor, "tokenizer") and processor.tokenizer is not None:
+        processor.tokenizer.padding_side = "left"
     return processor
 
 
