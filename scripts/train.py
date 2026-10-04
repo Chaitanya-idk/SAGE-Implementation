@@ -18,6 +18,7 @@ os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import pandas as pd
+import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
@@ -44,6 +45,8 @@ def parse_args():
     parser.add_argument("--quantization", type=str, default=None, choices=["none", "4bit", "8bit"], help="Quantization mode (use 4bit if low VRAM).")
     parser.add_argument("--max-pixels", type=int, default=None, help="Max image pixel resolution for vision encoder.")
     parser.add_argument("--max-hours", type=float, default=None, help="Override maximum training budget (hours).")
+    parser.add_argument("--max-train-samples", type=int, default=None, help="Stratified subset of training manifest (e.g. 15000).")
+    parser.add_argument("--no-grad-ckpt", action="store_true", help="Disable gradient checkpointing (faster when VRAM allows).")
     return parser.parse_args()
 
 
@@ -74,6 +77,8 @@ def main():
         overrides["model.max_pixels"] = args.max_pixels
     if args.max_hours:
         overrides["training.max_training_hours"] = args.max_hours
+    if args.no_grad_ckpt:
+        overrides["training.gradient_checkpointing"] = False
 
     config = load_config(args.config, overrides=overrides)
     seed = config.get("seed", 42)
@@ -105,7 +110,26 @@ def main():
     logger.info(f"Loading training manifest from {train_manifest_path}...")
     train_df = pd.read_parquet(train_manifest_path)
     val_df = pd.read_parquet(val_manifest_path)
-    logger.info(f"Loaded {len(train_df):,} training samples and {len(val_df):,} validation samples.")
+
+    # Stratified subset for compute budget fitting
+    max_train_samples = args.max_train_samples
+    if max_train_samples and len(train_df) > max_train_samples:
+        target_col = data_cfg.get("target_column", "canonical_disease")
+        logger.info(f"Subsetting training manifest from {len(train_df):,} to {max_train_samples:,} stratified samples...")
+        # Per-class proportional sampling
+        class_counts = train_df[target_col].value_counts()
+        sampled_parts = []
+        rng = np.random.RandomState(seed)
+        for cls, group in train_df.groupby(target_col):
+            n_keep = max(1, int(round(len(group) / len(train_df) * max_train_samples)))
+            sampled_parts.append(group.sample(n=min(n_keep, len(group)), random_state=rng.randint(0, 9999)))
+        train_df = pd.concat(sampled_parts).sample(frac=1.0, random_state=seed).reset_index(drop=True)
+        # Trim to exact target if slightly over
+        if len(train_df) > max_train_samples:
+            train_df = train_df.sample(n=max_train_samples, random_state=seed).reset_index(drop=True)
+        logger.info(f"Subset complete: {len(train_df):,} training samples retained across {train_df[target_col].nunique()} disease classes.")
+
+    logger.info(f"Training on {len(train_df):,} samples | Validation on {len(val_df):,} samples.")
 
     # Model & Processor Setup
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

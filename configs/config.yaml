@@ -37,21 +37,21 @@ data:
   test_fraction: 0.05       # 5% test
   target_column: "canonical_disease"
   image_column: "image"
-  num_workers: 4
+  num_workers: 2          # Lower for stable Parquet streaming on Kaggle
   prefetch_factor: 2
   pin_memory: true
 
 training:
   epochs: 2
-  batch_size: 4             # 4 samples per device (fits 16GB VRAM cleanly)
+  batch_size: 8             # 8 samples per device (T4 has headroom — was only 4.3GB used at batch=4)
   eval_batch_size: 4
-  gradient_accumulation_steps: 4 # 4 * 4 = 16 effective batch size
+  gradient_accumulation_steps: 2 # 8 * 2 = 16 effective batch size
   learning_rate: 0.0002
   weight_decay: 0.01
   warmup_ratio: 0.03
   scheduler: "cosine"
   max_grad_norm: 1.0
-  gradient_checkpointing: true
+  gradient_checkpointing: false  # Disabled: VRAM is underused at 4.3GB; saves ~15% time
   max_training_hours: 9.0   # Hard budget limit reserving ~1h for eval/checkpoints
   eval_steps: 3000          # Step-wise validation interval
   save_steps: 3000          # Checkpoint interval
