@@ -90,7 +90,8 @@ def get_device_info() -> Dict[str, Any]:
         info["device_name"] = torch.cuda.get_device_name(0)
         total_mem = torch.cuda.get_device_properties(0).total_memory
         info["total_memory_gb"] = round(total_mem / (1024 ** 3), 2)
-        info["bf16_supported"] = torch.cuda.is_bf16_supported()
+        major, minor = torch.cuda.get_device_capability(0)
+        info["bf16_supported"] = (major >= 8) and torch.cuda.is_bf16_supported()
     return info
 
 
