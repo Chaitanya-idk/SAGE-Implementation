@@ -74,25 +74,26 @@ def load_metadata_from_local_shards(parquet_files: List[str]) -> pd.DataFrame:
     return full_df
 
 
-def load_metadata_from_hf(dataset_name: str, max_stream_rows: int = 500000) -> pd.DataFrame:
-    """Streams metadata from Hugging Face dataset (omitting images)."""
-    logger.info(f"Streaming metadata from Hugging Face dataset '{dataset_name}'...")
-    ds = load_dataset(dataset_name, split="train", streaming=True)
+def load_metadata_from_hf(dataset_name: str, cache_dir: Optional[str] = None) -> Tuple[pd.DataFrame, List[str]]:
+    """
+    Downloads/verifies Parquet shards from Hugging Face Hub using snapshot_download,
+    then scans only the metadata columns across shards to build manifests with exact shard pointers.
+    """
+    from huggingface_hub import snapshot_download
+    logger.info(f"Fetching Parquet shard metadata from Hugging Face Hub: '{dataset_name}'...")
+    local_dir = snapshot_download(
+        repo_id=dataset_name,
+        repo_type="dataset",
+        allow_patterns=["*.parquet", "**/*.parquet"],
+        cache_dir=cache_dir,
+    )
+    parquet_files = sorted(glob.glob(os.path.join(local_dir, "**/*.parquet"), recursive=True))
+    if not parquet_files:
+        raise FileNotFoundError(f"No Parquet files found in downloaded repo '{dataset_name}' at {local_dir}")
     
-    rows = []
-    for idx, item in enumerate(ds):
-        if idx >= max_stream_rows:
-            break
-        row = {k: item[k] for k in METADATA_COLUMNS if k in item}
-        row["shard_path"] = "hf_streaming"
-        row["row_idx_in_shard"] = idx
-        rows.append(row)
-        if (idx + 1) % 50000 == 0:
-            logger.info(f"Streamed {idx + 1:,} metadata rows...")
-
-    df = pd.DataFrame(rows)
-    logger.info(f"Finished streaming {len(df):,} metadata rows.")
-    return df
+    logger.info(f"Downloaded/located {len(parquet_files)} Parquet shard(s) at {local_dir}")
+    df = load_metadata_from_local_shards(parquet_files)
+    return df, parquet_files
 
 
 def balance_classes(
@@ -264,7 +265,7 @@ def main():
     if parquet_files:
         df_meta = load_metadata_from_local_shards(parquet_files)
     else:
-        df_meta = load_metadata_from_hf(data_cfg.get("dataset_name", "tirtho149/SAGE"))
+        df_meta, parquet_files = load_metadata_from_hf(data_cfg.get("dataset_name", "tirtho149/SAGE"))
 
     total_source = len(df_meta)
 
