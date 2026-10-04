@@ -6,7 +6,7 @@ Parses structured model diagnoses, calculates comprehensive metrics, and creates
 import os
 import json
 import logging
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 
 import torch
 import pandas as pd
