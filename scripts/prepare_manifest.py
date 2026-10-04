@@ -145,48 +145,51 @@ def create_splits(
     test_frac: float = 0.05,
     seed: int = 42,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Creates deterministic 90% Train / 5% Val / 5% Test splits stratified by canonical_disease."""
+    """
+    Creates deterministic 90% Train / 5% Val / 5% Test splits stratified by canonical_disease.
+    Handles rare and low-count classes robustly without sklearn group-size errors.
+    """
     logger.info(f"Creating Train ({(1-val_frac-test_frac)*100:.0f}%) / Val ({val_frac*100:.0f}%) / Test ({test_frac*100:.0f}%) splits...")
     
-    # Identify classes with at least 3 samples for stratified splitting
-    counts = df[target_column].value_counts()
-    valid_classes = counts[counts >= 3].index
-    
-    df_strat = df[df[target_column].isin(valid_classes)].copy()
-    df_rare = df[~df[target_column].isin(valid_classes)].copy()
+    train_indices: List[int] = []
+    val_indices: List[int] = []
+    test_indices: List[int] = []
 
-    # Stratified split for main classes
-    total_eval_frac = val_frac + test_frac
-    train_idx, eval_idx = train_test_split(
-        df_strat.index,
-        test_size=total_eval_frac,
-        stratify=df_strat[target_column],
-        random_state=seed,
-    )
-    
-    df_train_strat = df_strat.loc[train_idx]
-    df_eval = df_strat.loc[eval_idx]
+    rng = np.random.RandomState(seed)
 
-    # Split eval equally into Val and Test
-    val_ratio = val_frac / total_eval_frac
-    val_idx, test_idx = train_test_split(
-        df_eval.index,
-        test_size=(1.0 - val_ratio),
-        stratify=df_eval[target_column],
-        random_state=seed,
-    )
-    
-    df_val = df_eval.loc[val_idx].copy()
-    df_test = df_eval.loc[test_idx].copy()
+    for cls_name, group in df.groupby(target_column):
+        indices = group.index.tolist()
+        rng.shuffle(indices)
+        n = len(indices)
 
-    # Rare classes: put into train to maximize disease coverage
-    df_train = pd.concat([df_train_strat, df_rare], ignore_index=True)
+        if n == 1:
+            # Single sample: preserve in train to maximize disease coverage
+            train_indices.extend(indices)
+        elif n == 2:
+            # Two samples: 1 in train, 1 in val
+            train_indices.append(indices[0])
+            val_indices.append(indices[1])
+        elif n <= 5:
+            # 3 to 5 samples: 1 in val, 1 in test, rest in train
+            val_indices.append(indices[0])
+            test_indices.append(indices[1])
+            train_indices.extend(indices[2:])
+        else:
+            n_val = max(1, int(round(n * val_frac)))
+            n_test = max(1, int(round(n * test_frac)))
+            if n_val + n_test >= n:
+                n_val = max(1, (n - 1) // 2)
+                n_test = max(1, n - 1 - n_val)
 
-    # Shuffle deterministically
-    df_train = df_train.sample(frac=1.0, random_state=seed).reset_index(drop=True)
-    df_val = df_val.sample(frac=1.0, random_state=seed).reset_index(drop=True)
-    df_test = df_test.sample(frac=1.0, random_state=seed).reset_index(drop=True)
+            val_indices.extend(indices[:n_val])
+            test_indices.extend(indices[n_val : n_val + n_test])
+            train_indices.extend(indices[n_val + n_test :])
 
+    df_train = df.loc[train_indices].sample(frac=1.0, random_state=seed).reset_index(drop=True)
+    df_val = df.loc[val_indices].sample(frac=1.0, random_state=seed).reset_index(drop=True)
+    df_test = df.loc[test_indices].sample(frac=1.0, random_state=seed).reset_index(drop=True)
+
+    logger.info(f"Splits successfully created: Train={len(df_train):,}, Val={len(df_val):,}, Test={len(df_test):,}")
     return df_train, df_val, df_test
 
 
