@@ -11,6 +11,9 @@ import argparse
 import logging
 from pathlib import Path
 
+# Mitigate CUDA memory fragmentation
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
 # Add project root to sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -37,6 +40,9 @@ def parse_args():
     parser.add_argument("--model-path", type=str, default=None, help="Override path to base model weights.")
     parser.add_argument("--epochs", type=int, default=None, help="Override number of training epochs.")
     parser.add_argument("--batch-size", type=int, default=None, help="Override batch size per device.")
+    parser.add_argument("--grad-accum", type=int, default=None, help="Override gradient accumulation steps.")
+    parser.add_argument("--quantization", type=str, default=None, choices=["none", "4bit", "8bit"], help="Quantization mode (use 4bit if low VRAM).")
+    parser.add_argument("--max-pixels", type=int, default=None, help="Max image pixel resolution for vision encoder.")
     parser.add_argument("--max-hours", type=float, default=None, help="Override maximum training budget (hours).")
     return parser.parse_args()
 
@@ -60,6 +66,12 @@ def main():
         overrides["training.epochs"] = args.epochs
     if args.batch_size:
         overrides["training.batch_size"] = args.batch_size
+    if args.grad_accum:
+        overrides["training.gradient_accumulation_steps"] = args.grad_accum
+    if args.quantization:
+        overrides["model.quantization"] = args.quantization
+    if args.max_pixels:
+        overrides["model.max_pixels"] = args.max_pixels
     if args.max_hours:
         overrides["training.max_training_hours"] = args.max_hours
 

@@ -12,7 +12,7 @@ model:
   quantization: "none" # "none", "4bit" (NF4 double quant), "8bit"
   trust_remote_code: true
   min_pixels: 3136      # 56 * 56
-  max_pixels: 1003520   # ~1000 * 1000 (fits Kaggle GPU memory with rich visual feature extraction)
+  max_pixels: 501760    # ~700 * 700 (optimizes vision tokens to fit 16GB GPU memory during backward pass)
 
 lora:
   r: 32
@@ -43,9 +43,9 @@ data:
 
 training:
   epochs: 2
-  batch_size: 8
-  eval_batch_size: 8
-  gradient_accumulation_steps: 2
+  batch_size: 4             # 4 samples per device (fits 16GB VRAM cleanly)
+  eval_batch_size: 4
+  gradient_accumulation_steps: 4 # 4 * 4 = 16 effective batch size
   learning_rate: 0.0002
   weight_decay: 0.01
   warmup_ratio: 0.03
