@@ -18,7 +18,7 @@ from torch.utils.data import DataLoader, Subset
 from transformers import get_cosine_schedule_with_warmup
 from tqdm.auto import tqdm
 
-from src.utils import BudgetManager, save_json, load_json, ensure_dirs
+from src.utils import BudgetManager, save_json, load_json, ensure_dirs, get_device_info, resolve_dtype
 from src.dataset import PipelineProfiler
 from src.evaluation import evaluate_model
 
@@ -72,6 +72,14 @@ class SAGETrainer:
         self.eval_steps = int(self.train_cfg.get("eval_steps", 3000))
         self.save_steps = int(self.train_cfg.get("save_steps", 3000))
         self.max_training_hours = float(self.train_cfg.get("max_training_hours", 9.0))
+
+        # Precision & device context for AMP autocast (prevents FP16 softmax overflow)
+        dev_info = get_device_info()
+        self.compute_dtype = resolve_dtype(
+            config.get("model", {}).get("dtype", "auto"),
+            dev_info.get("bf16_supported", False),
+        )
+        self.device_type = "cuda" if torch.cuda.is_available() else "cpu"
 
         # Optimizer
         trainable_params = [p for p in self.model.parameters() if p.requires_grad]
@@ -274,18 +282,59 @@ class SAGETrainer:
                     if k in batch and isinstance(batch[k], torch.Tensor):
                         model_inputs[k] = batch[k].to(self.device)
 
-                outputs = self.model(**model_inputs)
-                loss = outputs.loss / self.grad_accum_steps
+                # AMP Autocast: Keeps matmuls in FP16/BF16 while running Softmax & CrossEntropy in FP32
+                with torch.autocast(device_type=self.device_type, dtype=self.compute_dtype):
+                    outputs = self.model(**model_inputs)
+                    raw_loss = outputs.loss
+
+                # Pre-backward NaN / Inf Guard: Skip corrupted batch without updating gradients
+                if raw_loss is None or torch.isnan(raw_loss) or torch.isinf(raw_loss):
+                    logger.warning(
+                        "[NaN Guard] NaN/Inf loss encountered at step %d, batch %d. Skipping micro-batch.",
+                        self.global_step,
+                        batch_idx + 1,
+                    )
+                    self.profiler.mark_compute_finished()
+                    continue
+
+                loss = raw_loss / self.grad_accum_steps
                 loss.backward()
 
-                accumulated_loss += loss.item() * self.grad_accum_steps
+                accumulated_loss += raw_loss.item()
                 self.profiler.mark_compute_finished()
 
                 is_last_batch = (batch_idx + 1) == total_batches
                 is_accum_step = (batch_idx + 1) % self.grad_accum_steps == 0
 
                 if is_accum_step or is_last_batch:
-                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
+                    # Check for NaN / Inf parameter gradients before stepping optimizer
+                    has_invalid_grad = False
+                    for p in self.model.parameters():
+                        if p.grad is not None:
+                            if torch.isnan(p.grad).any() or torch.isinf(p.grad).any():
+                                has_invalid_grad = True
+                                break
+
+                    if has_invalid_grad:
+                        logger.warning(
+                            "[NaN Guard] NaN/Inf gradient detected at step %d. Discarding update to protect weights.",
+                            self.global_step,
+                        )
+                        self.optimizer.zero_grad()
+                        accumulated_loss = 0.0
+                        continue
+
+                    grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
+                    if torch.isnan(torch.as_tensor(grad_norm)) or torch.isinf(torch.as_tensor(grad_norm)):
+                        logger.warning(
+                            "[NaN Guard] Gradient norm exploded (%.4f) at step %d. Discarding optimizer update.",
+                            float(grad_norm),
+                            self.global_step,
+                        )
+                        self.optimizer.zero_grad()
+                        accumulated_loss = 0.0
+                        continue
+
                     self.optimizer.step()
                     self.scheduler.step()
                     self.optimizer.zero_grad()

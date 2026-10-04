@@ -16,7 +16,7 @@ model:
 
 lora:
   r: 32
-  alpha: 64
+  alpha: 32            # 1.0x scaling factor for stable FP16 convergence
   dropout: 0.05
   bias: "none"
   target_modules:
@@ -46,11 +46,11 @@ training:
   batch_size: 4             # 4 per device — safe on T4 with gradient checkpointing
   eval_batch_size: 4
   gradient_accumulation_steps: 4 # 4 * 4 = 16 effective batch size
-  learning_rate: 0.0002
+  learning_rate: 0.00005    # 5e-5: Stable for Qwen2.5-VL LoRA on FP16 hardware (prevents NaN explosion)
   weight_decay: 0.01
-  warmup_ratio: 0.03
+  warmup_ratio: 0.05        # 5% warmup for smooth gradient ramp-up
   scheduler: "cosine"
-  max_grad_norm: 1.0
+  max_grad_norm: 0.5        # 0.5: Tighter gradient clipping prevents FP16 overflow (>65,504)
   gradient_checkpointing: true   # REQUIRED: keeps activations low (saves ~10GB vs no checkpointing)
   max_training_hours: 9.0   # Hard budget limit reserving ~1h for eval/checkpoints
   eval_steps: 3000          # Step-wise validation interval
@@ -60,9 +60,9 @@ training:
 
 evaluation:
   primary_metric: "macro_f1" # "macro_f1", "accuracy", "normalized_accuracy"
-  eval_subset_size: 1000     # Fixed validation subset for periodic evaluation during training
+  eval_subset_size: 250      # Statistically representative subset, reduces validation time from 59m to ~8m
   full_eval_at_epoch_end: true
-  generation_max_new_tokens: 128
+  generation_max_new_tokens: 64 # Structured diagnosis output fits within 35-50 tokens; speeds up eval 2x
   temperature: 0.0
 
 paths:

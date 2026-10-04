@@ -47,6 +47,7 @@ def parse_args():
     parser.add_argument("--max-hours", type=float, default=None, help="Override maximum training budget (hours).")
     parser.add_argument("--max-train-samples", type=int, default=None, help="Stratified subset of training manifest (e.g. 15000).")
     parser.add_argument("--no-grad-ckpt", action="store_true", help="Disable gradient checkpointing (faster when VRAM allows).")
+    parser.add_argument("--lr", type=float, default=None, help="Override learning rate (e.g. 5e-5).")
     return parser.parse_args()
 
 
@@ -61,6 +62,8 @@ def main():
 
     # Load configuration
     overrides = {}
+    if args.lr:
+        overrides["training.learning_rate"] = args.lr
     if args.data_dir:
         overrides["data.data_dir"] = args.data_dir
     if args.model_path:
