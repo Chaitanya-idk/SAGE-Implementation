@@ -163,28 +163,28 @@ class SAGEManifestDataset(Dataset):
         row_idx_in_shard = row.get("row_idx_in_shard", idx)
         
         img = None
-        # Option A: Image is stored directly in manifest row (e.g. small subset/smoke test)
-        if "image" in row and row["image"] is not None:
+        # Option A (Priority 1): Direct fast preprocessed image file path
+        if "image_path" in row and row["image_path"] and os.path.exists(str(row["image_path"])):
+            try:
+                img = Image.open(str(row["image_path"])).convert("RGB")
+            except Exception as e:
+                self.bad_logger.log(filename, f"Error opening preprocessed image path: {e}", shard_path, row_idx_in_shard)
+                img = self.fallback_image
+
+        # Option B: Image stored directly in manifest row (e.g. small subset/smoke test)
+        elif "image" in row and row["image"] is not None:
             try:
                 img = decode_image(row["image"])
             except Exception as e:
                 self.bad_logger.log(filename, f"Error decoding row image: {e}", shard_path, row_idx_in_shard)
                 img = self.fallback_image
                 
-        # Option B: Image stored in parquet shard file
+        # Option C: Image stored in compressed parquet shard file
         elif shard_path and os.path.exists(self._resolve_shard_path(str(shard_path))):
             try:
                 img = self._read_image_from_shard(str(shard_path), int(row_idx_in_shard))
             except Exception as e:
                 self.bad_logger.log(filename, f"Error reading from shard: {e}", shard_path, row_idx_in_shard)
-                img = self.fallback_image
-                
-        # Option C: Direct image file path
-        elif "image_path" in row and os.path.exists(str(row["image_path"])):
-            try:
-                img = Image.open(str(row["image_path"])).convert("RGB")
-            except Exception as e:
-                self.bad_logger.log(filename, f"Error opening image path: {e}", shard_path, row_idx_in_shard)
                 img = self.fallback_image
         else:
             # Fallback for missing image reference

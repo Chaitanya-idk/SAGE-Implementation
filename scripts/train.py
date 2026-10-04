@@ -97,6 +97,22 @@ def main():
     val_manifest_path = os.path.join(manifest_dir, "val_manifest.parquet")
     test_manifest_path = os.path.join(manifest_dir, "test_manifest.parquet")
 
+    # Auto-detect preprocessed manifests (which point directly to pre-resized JPEGs on disk)
+    prep_train = os.path.join(manifest_dir, "train_manifest_preprocessed.parquet")
+    if os.path.exists(prep_train):
+        train_manifest_path = prep_train
+        logger.info(f"Detected preprocessed training manifest: '{prep_train}' (ultra-fast disk loading enabled)")
+    elif os.path.exists("artifacts/train_manifest_preprocessed.parquet"):
+        train_manifest_path = "artifacts/train_manifest_preprocessed.parquet"
+        logger.info(f"Detected preprocessed training manifest: '{train_manifest_path}'")
+
+    prep_val = os.path.join(manifest_dir, "val_manifest_preprocessed.parquet")
+    if os.path.exists(prep_val):
+        val_manifest_path = prep_val
+        logger.info(f"Detected preprocessed validation manifest: '{prep_val}'")
+    elif os.path.exists("artifacts/val_manifest_preprocessed.parquet"):
+        val_manifest_path = "artifacts/val_manifest_preprocessed.parquet"
+
     # Fallback to root artifacts if not in artifacts/data
     if not os.path.exists(train_manifest_path) and os.path.exists("artifacts/train_manifest.parquet"):
         train_manifest_path = "artifacts/train_manifest.parquet"
