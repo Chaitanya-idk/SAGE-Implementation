@@ -210,30 +210,32 @@ class SAGETrainer:
 
     def train(self) -> Dict[str, Any]:
         """
-        Executes complete training pipeline with 3-level tqdm bars and budget checks.
+        Executes complete training pipeline with 2-level tqdm progress bars.
+
+        Progress bars update ONLY on optimizer steps (every grad_accum_steps
+        micro-batches), keeping output clean and readable in Kaggle notebooks.
         """
-        total_samples = len(self.train_dataloader.dataset) * self.num_epochs
         total_batches = len(self.train_dataloader)
 
         print("\n" + "=" * 65)
         print(" STARTING SAGE PRODUCTION TRAINING")
         print("=" * 65)
-        print(f" Total Epochs:               {self.num_epochs}")
-        print(f" Train Samples per Epoch:   {len(self.train_dataloader.dataset):,}")
-        print(f" Total Training Steps:      {self.total_training_steps:,}")
-        print(f" Max Budget Limit:          {self.max_training_hours} Hours")
-        print(f" Gradient Accumulation:     {self.grad_accum_steps}")
-        print(f" Effective Batch Size:      {self.batch_size * self.grad_accum_steps}")
+        print(f" Total Epochs:              {self.num_epochs}")
+        print(f" Train Samples per Epoch:  {len(self.train_dataloader.dataset):,}")
+        print(f" Total Training Steps:     {self.total_training_steps:,}")
+        print(f" Max Budget Limit:         {self.max_training_hours} Hours")
+        print(f" Gradient Accumulation:    {self.grad_accum_steps}")
+        print(f" Effective Batch Size:     {self.batch_size * self.grad_accum_steps}")
         print("=" * 65 + "\n")
 
-        # LEVEL 1: TOTAL TRAINING PROGRESS BAR
+        # LEVEL 1: Total training bar — advances once per optimizer step
         total_bar = tqdm(
             total=self.total_training_steps,
             initial=self.global_step,
-            desc="TOTAL TRAINING",
+            desc="Training",
             position=0,
             leave=True,
-            bar_format="{desc} {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}] {postfix}",
+            dynamic_ncols=True,
         )
 
         budget_exceeded = False
@@ -247,53 +249,42 @@ class SAGETrainer:
             epoch_loss = 0.0
             accumulated_loss = 0.0
 
-            # LEVEL 2: EPOCH PROGRESS BAR
-            epoch_desc = f"Epoch {epoch + 1}/{self.num_epochs}"
+            # LEVEL 2: Epoch bar — counts optimizer steps, NOT raw micro-batches
             epoch_bar = tqdm(
-                total=total_batches,
-                desc=epoch_desc,
+                total=self.steps_per_epoch,
+                desc=f"  Epoch {epoch + 1}/{self.num_epochs}",
                 position=1,
                 leave=False,
-                bar_format="{desc} {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}] {postfix}",
+                dynamic_ncols=True,
             )
-
-            # LEVEL 3: BATCH PROGRESS BAR
-            batch_bar = tqdm(
-                total=self.grad_accum_steps,
-                desc="Batch Accumulation",
-                position=2,
-                leave=False,
-                bar_format="{desc} {percentage:3.0f}%|{bar}| [{elapsed}] {postfix}",
-            )
-
-            epoch_start_time = time.time()
 
             for batch_idx, batch in enumerate(self.train_dataloader):
                 self.profiler.mark_data_ready()
 
-                # Check budget constraint before executing step
                 if self.budget_manager.is_budget_exceeded():
                     budget_exceeded = True
-                    print(f"\n[BUDGET] 10-Hour compute budget ({self.max_training_hours}h) reached. Initiating clean exit.")
+                    tqdm.write(
+                        f"\n[BUDGET] Compute budget ({self.max_training_hours}h) reached."
+                        " Initiating clean exit."
+                    )
                     break
 
-                # Prepare model inputs
                 model_inputs = {}
                 for k in ("input_ids", "attention_mask", "pixel_values", "image_grid_thw", "labels"):
                     if k in batch and isinstance(batch[k], torch.Tensor):
                         model_inputs[k] = batch[k].to(self.device)
 
-                # Forward pass
                 outputs = self.model(**model_inputs)
                 loss = outputs.loss / self.grad_accum_steps
                 loss.backward()
 
                 accumulated_loss += loss.item() * self.grad_accum_steps
-                batch_bar.update(1)
-                batch_bar.set_postfix({"loss": f"{outputs.loss.item():.4f}", "step": f"{(batch_idx % self.grad_accum_steps) + 1}/{self.grad_accum_steps}"})
+                self.profiler.mark_compute_finished()
 
-                # Optimizer step upon completing gradient accumulation
-                if (batch_idx + 1) % self.grad_accum_steps == 0 or (batch_idx + 1) == total_batches:
+                is_last_batch = (batch_idx + 1) == total_batches
+                is_accum_step = (batch_idx + 1) % self.grad_accum_steps == 0
+
+                if is_accum_step or is_last_batch:
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
                     self.optimizer.step()
                     self.scheduler.step()
@@ -304,80 +295,88 @@ class SAGETrainer:
                     epoch_loss += accumulated_loss
                     accumulated_loss = 0.0
 
-                    # Update Level 1 & Level 2 bars
-                    total_bar.update(1)
                     curr_lr = self.scheduler.get_last_lr()[0]
-                    vram_gb = torch.cuda.memory_allocated() / (1024 ** 3) if torch.cuda.is_available() else 0.0
-                    samples_processed = (self.global_step * self.batch_size * self.grad_accum_steps)
+                    vram_gb = (
+                        torch.cuda.memory_allocated() / (1024 ** 3)
+                        if torch.cuda.is_available() else 0.0
+                    )
+                    status = self.budget_manager.get_progress_status(
+                        self.global_step, self.total_training_steps
+                    )
 
-                    status = self.budget_manager.get_progress_status(self.global_step, self.total_training_steps)
-                    total_bar.set_postfix({
-                        "Epoch": f"{epoch + 1}/{self.num_epochs}",
-                        "Elapsed": status["elapsed_str"],
-                        "ETA": status["eta_str"],
-                        "Samples": f"{samples_processed:,}",
-                    })
+                    # Both bars update ONCE per optimizer step
+                    total_bar.set_postfix(
+                        loss=f"{latest_loss:.4f}",
+                        lr=f"{curr_lr:.2e}",
+                        VRAM=f"{vram_gb:.1f}GB",
+                        ETA=status["eta_str"],
+                        refresh=False,
+                    )
+                    total_bar.update(1)
+                    epoch_bar.set_postfix(
+                        loss=f"{latest_loss:.4f}",
+                        lr=f"{curr_lr:.2e}",
+                        refresh=False,
+                    )
+                    epoch_bar.update(1)
 
-                    epoch_bar.set_postfix({
-                        "loss": f"{latest_loss:.4f}",
-                        "lr": f"{curr_lr:.2e}",
-                        "VRAM": f"{vram_gb:.1f}GB",
-                        "wait%": f"{self.profiler.get_wait_percentage()}%",
-                    })
-
-                    batch_bar.reset()
+                    # Periodic structured log line (not per-sample spam)
+                    if self.global_step % self.logging_steps == 0:
+                        logger.info(
+                            "[Step %d/%d] Epoch %d/%d | loss=%.4f | lr=%.2e"
+                            " | VRAM=%.1fGB | elapsed=%s | ETA=%s",
+                            self.global_step, self.total_training_steps,
+                            epoch + 1, self.num_epochs,
+                            latest_loss, curr_lr, vram_gb,
+                            status["elapsed_str"], status["eta_str"],
+                        )
 
                     # Periodic step evaluation
                     if self.eval_steps > 0 and self.global_step % self.eval_steps == 0:
                         val_metrics = self.run_validation(is_final=False)
                         val_f1 = val_metrics.get("macro_f1", 0.0)
-                        print(f"\n[Step {self.global_step}] Validation Macro F1: {val_f1:.4f} | Accuracy: {val_metrics.get('normalized_accuracy', 0.0):.4f}")
-
-                        # Save latest checkpoint
+                        tqdm.write(
+                            f"\n[Step {self.global_step}] Val Macro-F1: {val_f1:.4f}"
+                            f" | Accuracy: {val_metrics.get("normalized_accuracy", 0.0):.4f}"
+                        )
                         self._save_checkpoint("latest", val_metric=val_f1)
-
-                        # Save best checkpoint based primarily on Macro F1
                         if val_f1 > self.best_metric:
                             self.best_metric = val_f1
                             self.best_step = self.global_step
                             self.best_epoch = epoch + 1
                             self._save_checkpoint("best", val_metric=val_f1)
-                            print(f"[BEST] New best checkpoint saved with Macro F1: {val_f1:.4f}")
-
+                            tqdm.write(f"[BEST] New best checkpoint: Macro-F1={val_f1:.4f}")
                         self.model.train()
 
-                    # Periodic step checkpoint
+                    # Periodic checkpoint without eval
                     elif self.save_steps > 0 and self.global_step % self.save_steps == 0:
                         self._save_checkpoint("latest", val_metric=None)
 
-                self.profiler.mark_compute_finished()
-                epoch_bar.update(1)
-
             epoch_bar.close()
-            batch_bar.close()
 
-            # End of epoch checkpoint
+            # End-of-epoch saves
             self._save_checkpoint(f"epoch_{epoch + 1:02d}", val_metric=None)
             self._save_checkpoint("latest", val_metric=None)
 
-            # End of epoch validation
+            # End-of-epoch validation
             if self.eval_cfg.get("full_eval_at_epoch_end", True) and not budget_exceeded:
                 val_metrics = self.run_validation(is_final=False)
                 val_f1 = val_metrics.get("macro_f1", 0.0)
-                print(f"\n[Epoch {epoch + 1}] Validation Macro F1: {val_f1:.4f} | Accuracy: {val_metrics.get('normalized_accuracy', 0.0):.4f}")
+                tqdm.write(
+                    f"\n[Epoch {epoch + 1}/{self.num_epochs}] Val Macro-F1: {val_f1:.4f}"
+                    f" | Accuracy: {val_metrics.get("normalized_accuracy", 0.0):.4f}"
+                )
                 if val_f1 > self.best_metric:
                     self.best_metric = val_f1
                     self.best_step = self.global_step
                     self.best_epoch = epoch + 1
                     self._save_checkpoint("best", val_metric=val_f1)
-                    print(f"[BEST] New best checkpoint saved with Macro F1: {val_f1:.4f}")
+                    tqdm.write(f"[BEST] New best checkpoint: Macro-F1={val_f1:.4f}")
 
             if budget_exceeded:
                 break
 
         total_bar.close()
-
-        # Clean budget exit: ensure latest checkpoint is intact
         self._save_checkpoint("latest", val_metric=self.best_metric)
 
         elapsed_sec = self.budget_manager.elapsed_seconds()
@@ -393,7 +392,6 @@ class SAGETrainer:
             "best_macro_f1": round(self.best_metric, 4),
             "profiler": self.profiler.summary(),
         }
-
-        # Save training summary JSON
         save_json(train_stats, os.path.join(self.artifacts_dir, "training_summary.json"))
         return train_stats
+
