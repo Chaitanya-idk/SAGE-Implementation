@@ -172,9 +172,9 @@ def generate_final_report(
 - **Base Vision-Language Model**: `{config.get('model', {}).get('name', 'Qwen2.5-VL-3B-Instruct')}`
 - **Training Paradigm**: Parameter-Efficient Fine-Tuning (PEFT / LoRA)
 - **Primary Learning Target**: `canonical_disease` (SAGE Canonical Taxonomy)
-- **Total Training Samples**: `{train_stats.get('total_train_samples', 'N/A'):,}`
-- **Total Validation Samples**: `{train_stats.get('total_val_samples', 'N/A'):,}`
-- **Total Test Samples**: `{train_stats.get('total_test_samples', 'N/A'):,}`
+- **Total Training Samples**: `{train_stats.get('total_train_samples', 'N/A') if not isinstance(train_stats.get('total_train_samples'), int) else f"{train_stats['total_train_samples']:,}"}`
+- **Total Validation Samples**: `{train_stats.get('total_val_samples', 'N/A') if not isinstance(train_stats.get('total_val_samples'), int) else f"{train_stats['total_val_samples']:,}"}`
+- **Total Test Samples**: `{train_stats.get('total_test_samples', 'N/A') if not isinstance(train_stats.get('total_test_samples'), int) else f"{train_stats['total_test_samples']:,}"}`
 
 ---
 
