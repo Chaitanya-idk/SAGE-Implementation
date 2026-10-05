@@ -87,6 +87,7 @@ class SAGETrainer:
             trainable_params,
             lr=self.learning_rate,
             weight_decay=self.weight_decay,
+            foreach=False,
         )
 
         # Scheduler steps calculation
@@ -195,6 +196,10 @@ class SAGETrainer:
                 self.optimizer.load_state_dict(torch.load(opt_file, map_location=self.device, weights_only=False))
             except TypeError:
                 self.optimizer.load_state_dict(torch.load(opt_file, map_location=self.device))
+            for p, state in self.optimizer.state.items():
+                for k, v in state.items():
+                    if isinstance(v, torch.Tensor):
+                        state[k] = v.to(device=p.device, dtype=p.dtype if k != "step" else v.dtype)
             print("Restored optimizer state.")
 
         sched_file = os.path.join(checkpoint_dir, "scheduler.pt")
