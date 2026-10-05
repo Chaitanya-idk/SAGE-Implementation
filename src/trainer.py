@@ -170,36 +170,62 @@ class SAGETrainer:
         state_file = os.path.join(checkpoint_dir, "trainer_state.json")
         if os.path.exists(state_file):
             state = load_json(state_file)
-            self.current_epoch = state.get("epoch", 0)
+            saved_epoch = state.get("epoch", 0)
             self.global_step = state.get("global_step", 0)
             self.best_metric = state.get("best_metric", -1.0)
             self.best_step = state.get("best_step", 0)
             self.best_epoch = state.get("best_epoch", 0)
             resumed_elapsed = state.get("elapsed_seconds", 0.0)
+
+            # Advance epoch if the checkpoint was saved at end-of-epoch
+            if self.steps_per_epoch > 0 and self.global_step >= (saved_epoch + 1) * self.steps_per_epoch:
+                self.current_epoch = saved_epoch + 1
+                print(f"Saved checkpoint was at completion of Epoch {saved_epoch + 1}. Resuming at Epoch {self.current_epoch + 1}.")
+            else:
+                self.current_epoch = saved_epoch
+
             # Adjust start time so remaining budget is properly computed
             self.start_time = time.time() - resumed_elapsed
             self.budget_manager = BudgetManager(max_hours=self.max_training_hours, start_time=self.start_time)
-            print(f"Restored: Epoch {self.current_epoch}, Step {self.global_step}, Best Metric: {self.best_metric}")
+            print(f"Restored: Epoch {self.current_epoch + 1}/{self.num_epochs}, Step {self.global_step}/{self.total_training_steps}, Best Metric: {self.best_metric}")
 
         opt_file = os.path.join(checkpoint_dir, "optimizer.pt")
         if os.path.exists(opt_file):
-            self.optimizer.load_state_dict(torch.load(opt_file, map_location=self.device))
+            try:
+                self.optimizer.load_state_dict(torch.load(opt_file, map_location=self.device, weights_only=False))
+            except TypeError:
+                self.optimizer.load_state_dict(torch.load(opt_file, map_location=self.device))
             print("Restored optimizer state.")
 
         sched_file = os.path.join(checkpoint_dir, "scheduler.pt")
         if os.path.exists(sched_file):
-            self.scheduler.load_state_dict(torch.load(sched_file))
-            print("Restored learning rate scheduler.")
+            # Recalibrate scheduler for total_training_steps to prevent LR dropping to 0
+            # when extending training beyond the original checkpoint's step count
+            warmup_steps = int(self.total_training_steps * self.warmup_ratio)
+            self.scheduler = get_cosine_schedule_with_warmup(
+                self.optimizer,
+                num_warmup_steps=warmup_steps,
+                num_training_steps=self.total_training_steps,
+                last_epoch=self.global_step - 1 if self.global_step > 0 else -1,
+            )
+            curr_lr = self.scheduler.get_last_lr()[0]
+            print(f"Recalibrated scheduler for {self.total_training_steps} total steps (current step: {self.global_step}, LR: {curr_lr:.2e}).")
 
         rng_file = os.path.join(checkpoint_dir, "rng_state.pt")
         if os.path.exists(rng_file):
-            rng = torch.load(rng_file)
-            random.setstate(rng["python"])
-            np.random.set_state(rng["numpy"])
-            torch.set_rng_state(rng["torch"])
-            if torch.cuda.is_available() and rng.get("cuda") is not None:
-                torch.cuda.set_rng_state_all(rng["cuda"])
-            print("Restored deterministic random states.")
+            try:
+                try:
+                    rng = torch.load(rng_file, weights_only=False)
+                except TypeError:
+                    rng = torch.load(rng_file)
+                random.setstate(rng["python"])
+                np.random.set_state(rng["numpy"])
+                torch.set_rng_state(rng["torch"])
+                if torch.cuda.is_available() and rng.get("cuda") is not None:
+                    torch.cuda.set_rng_state_all(rng["cuda"])
+                print("Restored deterministic random states.")
+            except Exception as e:
+                logger.warning(f"Could not restore RNG state ({e}), proceeding with current seed.")
 
     def run_validation(self, is_final: bool = False) -> Dict[str, Any]:
         """Runs validation evaluation and logs diagnostic results."""

@@ -32,11 +32,6 @@ wheels/
 # Model weights & Checkpoints
 checkpoints/*
 !checkpoints/.gitkeep
-*.pt
-*.bin
-*.safetensors
-*.pth
-*.onnx
 
 # Data & Parquets (Do not commit raw 20GB dataset or big data files)
 *.parquet
