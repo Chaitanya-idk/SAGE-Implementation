@@ -183,8 +183,8 @@ def generate_final_report(
 - **LoRA Alpha**: `{config.get('lora', {}).get('alpha', 64)}`
 - **LoRA Dropout**: `{config.get('lora', {}).get('dropout', 0.05)}`
 - **Target Modules**: `{", ".join(config.get('lora', {}).get('target_modules', []))}`
-- **Trainable Parameters**: `{train_stats.get('trainable_parameters', 'N/A'):,}`
-- **Total Parameters**: `{train_stats.get('total_parameters', 'N/A'):,}`
+- **Trainable Parameters**: `{train_stats.get('trainable_parameters', 'N/A') if isinstance(train_stats.get('trainable_parameters'), str) else f"{train_stats.get('trainable_parameters', 0):,}"}`
+- **Total Parameters**: `{train_stats.get('total_parameters', 'N/A') if isinstance(train_stats.get('total_parameters'), str) else f"{train_stats.get('total_parameters', 0):,}"}`
 - **Trainable Percentage**: `{train_stats.get('trainable_pct', 'N/A')}%`
 
 ---
